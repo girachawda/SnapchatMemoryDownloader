@@ -14,6 +14,17 @@ Author: Aragan
 # ========================
 # Dependency bootstrap
 # ========================
+try:
+    import tkinter as tk
+except ModuleNotFoundError as e:
+    raise RuntimeError(
+        "tkinter is not available.\n\n"
+        "If you installed Python via Homebrew on macOS, tkinter is not "
+        "included by default.\n\n"
+        "Fix:\n"
+        "  brew install python-tk@<your_python_version>\n"
+    ) from e
+
 import sys
 import subprocess
 import importlib
