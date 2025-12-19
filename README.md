@@ -31,3 +31,12 @@ python3 download_snapchat.py
 - Internet connection (to download media files)
 - urllib (comes with Python standard library)
 - Access to the JSON export from Snapchat
+
+## GUI / Async Downloader (Optional)
+
+This repository also includes an optional GUI-based downloader for users who prefer a graphical interface and faster async downloads.
+
+Location:
+gui_async_downloader/
+
+This tool is built on top of the original logic and does not affect the existing CLI script.
