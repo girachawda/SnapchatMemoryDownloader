@@ -5,6 +5,8 @@ https://github.com/girachawda/SnapchatMemoryDownloader
 Extended with:
 - GUI
 - Async downloads
+- Background execution
+- Retry + failure tracking
 - ETA prediction
 - Performance optimisations
 
@@ -19,8 +21,7 @@ try:
 except ModuleNotFoundError as e:
     raise RuntimeError(
         "tkinter is not available.\n\n"
-        "If you installed Python via Homebrew on macOS, tkinter is not "
-        "included by default.\n\n"
+        "If you installed Python via Homebrew on macOS, tkinter is not included by default.\n\n"
         "Fix:\n"
         "  brew install python-tk@<your_python_version>\n"
     ) from e
@@ -40,7 +41,6 @@ def ensure_dependencies():
             missing.append(pkg)
 
     if missing:
-        print(f"Installing missing packages: {', '.join(missing)}")
         subprocess.check_call([
             sys.executable,
             "-m",
@@ -52,7 +52,7 @@ def ensure_dependencies():
 ensure_dependencies()
 
 # ========================
-# Imports (safe after install)
+# Imports
 # ========================
 import ssl
 import certifi
@@ -64,8 +64,14 @@ import aiohttp
 import aiofiles
 import threading
 from datetime import datetime
-import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+
+# ========================
+# Configuration
+# ========================
+MAX_RETRIES = 3
+BACKOFF_BASE = 1.5
+CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 # ========================
 # SSL context (macOS safe)
@@ -87,47 +93,66 @@ def extract_media_items(data):
         return out
     return []
 
-# ========================
-# Async download worker
-# ========================
-async def download_worker(session, item, output_dir, existing_files, semaphore):
+def build_filename(item):
     media_type = item.get("Media Type", "").lower()
     ext = ".mp4" if media_type == "video" else ".jpg"
 
     date_str = item.get("Date")
-    url = item.get("Media Download Url") or item.get("Media Url")
-    if not date_str or not url:
-        return False, None
+    if not date_str:
+        return None
 
-    filename = datetime.strptime(
-        date_str, "%Y-%m-%d %H:%M:%S UTC"
-    ).strftime("%Y-%m-%d_%H-%M-%S") + ext
+    return (
+        datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
+        .strftime("%Y-%m-%d_%H-%M-%S")
+        + ext
+    )
+
+# ========================
+# Async download worker
+# ========================
+async def download_worker(session, item, output_dir, existing_files, semaphore):
+    url = item.get("Media Download Url") or item.get("Media Url")
+    filename = build_filename(item)
+
+    if not url or not filename:
+        return False, None
 
     if filename in existing_files:
         return True, filename
 
     filepath = os.path.join(output_dir, filename)
 
-    try:
-        async with semaphore:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    raise Exception(f"HTTP {resp.status}")
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            async with semaphore:
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        raise Exception(f"HTTP {resp.status}")
 
-                async with aiofiles.open(filepath, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(1024 * 1024):  # 1 MB
-                        await f.write(chunk)
+                    async with aiofiles.open(filepath, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(CHUNK_SIZE):
+                            await f.write(chunk)
 
-        existing_files.add(filename)
-        return True, filename
+            existing_files.add(filename)
+            return True, filename
 
-    except Exception:
-        return False, filename
+        except Exception:
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(BACKOFF_BASE ** attempt)
+            else:
+                return False, filename
 
 # ========================
 # Async manager
 # ========================
-async def async_download(json_file, output_dir, progress_cb, status_cb, done_cb, max_concurrent):
+async def async_download(
+    json_file,
+    output_dir,
+    progress_cb,
+    status_cb,
+    done_cb,
+    max_concurrent
+):
     with open(json_file, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -136,7 +161,9 @@ async def async_download(json_file, output_dir, progress_cb, status_cb, done_cb,
     existing_files = set(os.listdir(output_dir))
 
     completed = 0
+    failed = 0
     start_time = time.time()
+
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async with aiohttp.ClientSession(
@@ -149,20 +176,25 @@ async def async_download(json_file, output_dir, progress_cb, status_cb, done_cb,
         ]
 
         for coro in asyncio.as_completed(tasks):
-            _, filename = await coro
+            success, _ = await coro
             completed += 1
+            if not success:
+                failed += 1
 
             progress_cb(completed, total)
 
             elapsed = time.time() - start_time
-            avg = elapsed / completed
+            avg = elapsed / completed if completed else 0
             remaining = avg * (total - completed)
+
             h, r = divmod(int(remaining), 3600)
             m, s = divmod(r, 60)
 
-            status_cb(f"{completed}/{total}  ETA {h:02d}:{m:02d}:{s:02d}")
+            status_cb(
+                f"{completed}/{total} | Failed: {failed} | ETA {h:02d}:{m:02d}:{s:02d}"
+            )
 
-    done_cb()
+    done_cb(failed)
 
 # ========================
 # Background runner
@@ -238,13 +270,16 @@ class SnapchatDownloaderGUI:
             self.output_dir.get(),
             lambda d, t: self.progress.config(value=int(d / t * 100)),
             lambda s: self.status.config(text=s),
-            lambda: self.finish(),
+            self.finish,
             self.max_concurrent.get()
         )
 
-    def finish(self):
+    def finish(self, failed_count=0):
         self.start_btn.config(state="normal")
-        self.status.config(text="All downloads finished ✅")
+        if failed_count:
+            self.status.config(text=f"Finished with {failed_count} failed downloads ⚠️")
+        else:
+            self.status.config(text="All downloads finished ✅")
 
 # ========================
 # Entry point
