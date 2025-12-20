@@ -3,8 +3,8 @@ import os
 import urllib.request
 from datetime import datetime
 
-JSON_FILE = ""   # Path to the Snapchat JSON file you downloaded
-OUTPUT_DIR = ""  # Where you want your videos/images to be saved
+JSON_FILE = '/Users/cadencemason/Downloads/mydata~1766204091449/json/memories_history.json' Path to the Snapchat JSON file you downloaded
+OUTPUT_DIR = Volumes/TOSHIBA_EXT. Where you want your videos/images to be saved
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -50,3 +50,4 @@ for item in media_items:
         print(f"❌ Failed: {e}")
 
 print("All remaining Snapchat memories downloaded ✅")
+python3 download_snapchat.py
