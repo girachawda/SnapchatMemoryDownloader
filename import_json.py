@@ -1,12 +1,12 @@
 import json
 import os
-import urllib.request
-from datetime import datetime
-import zipfile
 import shutil
+import urllib.request
+import zipfile
+from datetime import datetime
 
-JSON_FILE = "" # Path to the Snapchat JSON file you downloaded
-OUTPUT_DIR = "" # Where you want your videos/images to be saved
+JSON_FILE = ""  # Path to the Snapchat JSON file you downloaded
+OUTPUT_DIR = ""  # Where you want your videos/images to be saved
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 existing_files = set(os.listdir(OUTPUT_DIR))
@@ -15,36 +15,74 @@ with open(JSON_FILE, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 media_items = data.get("Saved Media", [])
+total_media = len(media_items)
+
+print(f"Total memories found: {total_media}")
 
 
-def base_name(date_str):
-    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
-    return dt.strftime("%Y-%m-%d_%H-%M-%S")
+def ensure_unique(filename: str) -> str:
+    """Return a filename that does not collide with existing files in OUTPUT_DIR."""
+    if filename not in existing_files:
+        return filename
+
+    stem, ext = os.path.splitext(filename)
+    counter = 1
+    candidate = f"{stem}_{counter}{ext}"
+
+    while candidate in existing_files:
+        counter += 1
+        candidate = f"{stem}_{counter}{ext}"
+
+    return candidate
 
 
-for item in media_items:
-    date_str = item.get("Date")
-    url = item.get("Media Download Url")
+def has_saved_media(base: str) -> bool:
+    """Check if any files with the given base name already exist."""
+    return any(f.startswith(base) for f in existing_files)
+
+
+for idx, item in enumerate(media_items, start=1):
     media_type = item.get("Media Type", "").lower()
+    ext = ".mp4" if media_type == "video" else ".jpg"
 
-    if not date_str or not url:
+    date_str = item.get("Date")
+    if not date_str:
+        print(f"[{idx}/{total_media}] Skipped (missing date)")
         continue
 
-    name = base_name(date_str)
-    zip_name = f"{name}_memory.zip"
+    try:
+        capture_dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S UTC")
+    except ValueError:
+        print(f"[{idx}/{total_media}] Skipped (bad date format)")
+        continue
+
+    url = item.get("Media Download Url")
+    if not url:
+        print(f"[{idx}/{total_media}] Skipped (missing URL)")
+        continue
+
+    base = capture_dt.strftime("%Y-%m-%d_%H-%M-%S")
+    time_str = capture_dt.strftime("%H:%M:%S UTC")
+    media_label = "VIDEO" if media_type == "video" else "PHOTO"
+
+    if has_saved_media(base):
+        print(f"[{idx}/{total_media}] {media_label:<5} {base} ({time_str}) ⏭ Already saved")
+        continue
+
+    print(f"[{idx}/{total_media}] {media_label:<5} {base} ({time_str})")
+
+    zip_name = f"{base}_memory.zip"
     zip_path = os.path.join(OUTPUT_DIR, zip_name)
-
-    # Skip if already processed
-    if any(f.startswith(name) for f in existing_files):
-        print(f"⏭ Skipping {name} (already exists)")
-        continue
-
-    print(f"⬇ Downloading {name}")
 
     try:
         urllib.request.urlretrieve(url, zip_path)
+    except Exception as e:
+        print(f"    ❌ Failed to download ({e})")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        continue
 
-        # ZIP = captioned memory or video bundle
+    try:
         if zipfile.is_zipfile(zip_path):
             temp_dir = zip_path + "_unzipped"
             os.makedirs(temp_dir, exist_ok=True)
@@ -54,38 +92,42 @@ for item in media_items:
 
             os.remove(zip_path)
 
-            for f in os.listdir(temp_dir):
-                if f.startswith("._"):
+            saved_any = False
+            for filename in os.listdir(temp_dir):
+                if filename.startswith("._"):
                     continue
 
-                src = os.path.join(temp_dir, f)
-                lf = f.lower()
+                src = os.path.join(temp_dir, filename)
+                lowercase = filename.lower()
 
-                if lf.endswith(".png"):
-                    out = f"{name}_caption.png"
-                elif lf.endswith(".jpg"):
-                    out = f"{name}_image.jpg"
-                elif lf.endswith(".mp4"):
-                    out = f"{name}_video.mp4"
+                if lowercase.endswith(".png"):
+                    out_name = f"{base}_caption.png"
+                elif lowercase.endswith(".jpg"):
+                    out_name = f"{base}_image.jpg"
+                elif lowercase.endswith(".mp4"):
+                    out_name = f"{base}_video.mp4"
                 else:
                     continue
 
-                if out in existing_files:
-                    continue
+                final_name = ensure_unique(out_name)
+                shutil.move(src, os.path.join(OUTPUT_DIR, final_name))
+                existing_files.add(final_name)
+                saved_any = True
 
-                shutil.move(src, os.path.join(OUTPUT_DIR, out))
-                existing_files.add(out)
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
-            shutil.rmtree(temp_dir)
-
-        # Non-zip (rare, but handled)
+            if saved_any:
+                print("    ✅ Saved media files")
+            else:
+                print("    ⚠️ ZIP had no supported files")
         else:
-            ext = ".mp4" if media_type == "video" else ".jpg"
-            out = f"{name}{ext}"
-            shutil.move(zip_path, os.path.join(OUTPUT_DIR, out))
-            existing_files.add(out)
-
+            final_name = ensure_unique(f"{base}{ext}")
+            shutil.move(zip_path, os.path.join(OUTPUT_DIR, final_name))
+            existing_files.add(final_name)
+            print("    ✅ Downloaded")
     except Exception as e:
-        print(f"❌ Failed: {e}")
+        print(f"    ❌ Failed to process ({e})")
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
 
-print("✅ Snapchat memories download complete (no dependencies)")
+print("All remaining Snapchat memories downloaded ✅")
