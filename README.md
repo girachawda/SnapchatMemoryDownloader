@@ -31,3 +31,11 @@ python3 download_snapchat.py
 - Internet connection (to download media files)
 - urllib (comes with Python standard library)
 - Access to the JSON export from Snapchat
+
+## Troubleshooting
+### ❌ HTTP Error 403: Forbidden
+
+This is normal and expected.
+
+Snapchat download links expire after some time and can only be used a limited number of times so if you are running this program a bit after downloading the json. You might need to re-export a new json from Snapchat. Re-run the code and use the new memories_history.json
+
