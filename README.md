@@ -40,3 +40,10 @@ Location:
 gui_async_downloader/
 
 This tool is built on top of the original logic and does not affect the existing CLI script.
+## Troubleshooting
+### ❌ HTTP Error 403: Forbidden
+
+This is normal and expected.
+
+Snapchat download links expire after some time and can only be used a limited number of times so if you are running this program a bit after downloading the json. You might need to re-export a new json from Snapchat. Re-run the code and use the new memories_history.json
+
